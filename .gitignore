@@ -1,0 +1,26 @@
+# env
+.env*.local
+.env
+
+# Next.js
+.next/
+out/
+build/
+
+# dependencies
+node_modules/
+
+# debug
+npm-debug.log*
+pnpm-debug.log*
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Supabase local
+supabase/.branches
+supabase/.temp
