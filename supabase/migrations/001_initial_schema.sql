@@ -55,14 +55,15 @@ CREATE TRIGGER profiles_updated_at
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- auth.users 新規登録時に profiles レコードを自動作成
+-- SET search_path = public, auth が必要（PostgreSQL 17 の SECURITY DEFINER セキュリティ強化対応）
 CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO profiles (id, display_name)
+  INSERT INTO public.profiles (id, display_name)
   VALUES (NEW.id, COALESCE(NEW.raw_user_meta_data->>'display_name', NEW.email));
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, auth;
 
 CREATE OR REPLACE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users

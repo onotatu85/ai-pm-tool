@@ -42,7 +42,7 @@ export default function ContentPage() {
     async function load() {
       const { data } = await supabase
         .from('contents')
-        .select('*, assignee:profiles!contents_assignee_id_fkey(display_name)')
+        .select('*')
         .eq('id', contentId)
         .single()
       if (data) {
@@ -59,6 +59,12 @@ export default function ContentPage() {
     setSaving(true)
     await supabase.from('contents').update({ title, body, status }).eq('id', contentId)
     setSaving(false)
+  }
+
+  async function handleDelete() {
+    if (!confirm('このコンテンツを削除しますか？この操作は取り消せません。')) return
+    await supabase.from('contents').delete().eq('id', contentId)
+    router.push(`/projects/${projectId}`)
   }
 
   async function handleAiSuggest() {
@@ -152,7 +158,10 @@ export default function ContentPage() {
               >
                 {saving ? '保存中...' : '保存'}
               </button>
-              <button className="ml-auto rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50">
+              <button
+                onClick={handleDelete}
+                className="ml-auto rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+              >
                 削除
               </button>
             </div>
