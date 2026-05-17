@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { ProjectStatusBadge } from '@/components/StatusBadge'
 import type { Project, ProjectStatus } from '@/lib/types'
 
+type ProjectWithContents = Project & { contents?: { status: string }[] }
+
 function formatRelativeDate(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime()
   const days = Math.floor(diff / 86400000)
@@ -15,7 +17,17 @@ function formatRelativeDate(dateStr: string): string {
   return `${Math.floor(days / 30)}ヶ月前`
 }
 
-export default function ProjectList({ projects }: { projects: Project[] }) {
+function getProgress(contents: { status: string }[] = []) {
+  const total = contents.length
+  if (total === 0) return { total: 0, published: 0, pct: 0 }
+  const published = contents.filter((c) => c.status === 'published').length
+  const approved = contents.filter((c) => c.status === 'approved').length
+  const review = contents.filter((c) => c.status === 'review').length
+  const pct = Math.round(((published * 1 + approved * 0.75 + review * 0.4) / total) * 100)
+  return { total, published, pct: Math.min(pct, 100) }
+}
+
+export default function ProjectList({ projects }: { projects: ProjectWithContents[] }) {
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | ''>('')
 
@@ -68,6 +80,22 @@ export default function ProjectList({ projects }: { projects: Project[] }) {
               <div className="flex items-center justify-between text-xs text-slate-400">
                 <span>更新: {formatRelativeDate(project.updated_at)}</span>
               </div>
+              {(() => {
+                const { total, published, pct } = getProgress((project as ProjectWithContents).contents)
+                return total > 0 ? (
+                  <div className="mt-3">
+                    <div className="mb-1 flex justify-between text-xs text-slate-400">
+                      <span>{total}件のコンテンツ</span>
+                      <span>{published}件公開済み</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full bg-slate-100">
+                      <div className="h-1.5 rounded-full bg-blue-400 transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 text-xs text-slate-300">コンテンツなし</div>
+                )
+              })()}
             </Link>
           ))}
         </div>

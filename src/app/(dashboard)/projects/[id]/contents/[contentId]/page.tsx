@@ -6,6 +6,21 @@ import { createClient } from '@/lib/supabase/client'
 import { ContentStatusBadge } from '@/components/StatusBadge'
 import type { Content, ContentStatus, AiPromptType } from '@/lib/types'
 import { useRouter, useParams } from 'next/navigation'
+import Toast from '@/components/Toast'
+
+type MemberItem = {
+  user_id: string
+  role: string
+  profile: { display_name: string } | { display_name: string }[] | null
+}
+
+type HistoryItem = {
+  id: string
+  action: string
+  created_at: string
+  metadata: { status?: string; title?: string } | null
+  profile: { display_name: string } | { display_name: string }[] | null
+}
 
 const STATUS_OPTIONS: { value: ContentStatus; label: string }[] = [
   { value: 'draft', label: 'Draft' },
@@ -33,23 +48,51 @@ export default function ContentPage() {
   const [body, setBody] = useState('')
   const [status, setStatus] = useState<ContentStatus>('draft')
   const [saving, setSaving] = useState(false)
+  const [assigneeId, setAssigneeId] = useState('')
+  const [members, setMembers] = useState<MemberItem[]>([])
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [aiTab, setAiTab] = useState<AiPromptType>('improve')
   const [aiResult, setAiResult] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const [isMock, setIsMock] = useState(false)
+  const [history, setHistory] = useState<HistoryItem[]>([])
 
+  async function loadHistory(cid: string) {
+    const { data } = await supabase
+      .from('audit_logs')
+      .select('id, action, created_at, metadata, profile:profiles(display_name)')
+      .eq('resource_type', 'content')
+      .eq('resource_id', cid)
+      .order('created_at', { ascending: false })
+      .limit(10)
+    if (data) setHistory(data as unknown as HistoryItem[])
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     async function load() {
-      const { data } = await supabase
+      const { data: contentData } = await supabase
         .from('contents')
-        .select('*')
+        .select('*, project:projects(organization_id)')
         .eq('id', contentId)
         .single()
-      if (data) {
-        setContent(data)
-        setTitle(data.title)
-        setBody(data.body ?? '')
-        setStatus(data.status)
+      if (contentData) {
+        setContent(contentData)
+        setTitle(contentData.title)
+        setBody(contentData.body ?? '')
+        setStatus(contentData.status)
+        setAssigneeId(contentData.assignee_id ?? '')
+
+        const orgId = (contentData as Content & { project: { organization_id: string } }).project?.organization_id
+        if (orgId) {
+          const { data: memberData } = await supabase
+            .from('org_members')
+            .select('user_id, role, profile:profiles(display_name)')
+            .eq('organization_id', orgId)
+          if (memberData) setMembers(memberData as unknown as MemberItem[])
+        }
+
+        await loadHistory(contentId)
       }
     }
     load()
@@ -57,7 +100,33 @@ export default function ContentPage() {
 
   async function handleSave() {
     setSaving(true)
-    await supabase.from('contents').update({ title, body, status }).eq('id', contentId)
+    const { data: { user } } = await supabase.auth.getUser()
+    const { error } = await supabase.from('contents').update({
+      title, body, status,
+      assignee_id: assigneeId || null
+    }).eq('id', contentId)
+
+    if (!error && user) {
+      const { data: membership } = await supabase
+        .from('org_members')
+        .select('organization_id')
+        .eq('user_id', user.id)
+        .single()
+      if (membership) {
+        await supabase.from('audit_logs').insert({
+          organization_id: membership.organization_id,
+          user_id: user.id,
+          action: 'content.update',
+          resource_type: 'content',
+          resource_id: contentId,
+          metadata: { title, status }
+        })
+      }
+      await loadHistory(contentId)
+      setToast({ message: '保存しました', type: 'success' })
+    } else if (error) {
+      setToast({ message: '保存に失敗しました', type: 'error' })
+    }
     setSaving(false)
   }
 
@@ -70,14 +139,30 @@ export default function ContentPage() {
   async function handleAiSuggest() {
     setAiLoading(true)
     setAiResult('')
+
+    const { data: { user } } = await supabase.auth.getUser()
+
     const res = await fetch('/api/ai/suggest', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ promptType: aiTab, body }),
     })
-    const data = await res.json()
+    const data = await res.json() as { response: string; isMock: boolean; model?: string }
     setAiResult(data.response)
     setIsMock(data.isMock)
+
+    if (!data.isMock && user) {
+      await supabase.from('ai_sessions').insert({
+        content_id: contentId,
+        prompt_type: aiTab,
+        prompt_text: body,
+        response: data.response,
+        model: data.model ?? 'claude-haiku-4-5',
+        status: 'completed',
+        created_by: user.id,
+      })
+    }
+
     setAiLoading(false)
   }
 
@@ -114,7 +199,7 @@ export default function ContentPage() {
               />
             </div>
 
-            <div className="mb-4 flex gap-3">
+            <div className="mb-4 flex flex-wrap items-center gap-3">
               <select
                 value={status}
                 onChange={(e) => setStatus(e.target.value as ContentStatus)}
@@ -127,6 +212,18 @@ export default function ContentPage() {
               <div className="flex items-center">
                 <ContentStatusBadge status={status} />
               </div>
+              <select
+                value={assigneeId}
+                onChange={(e) => setAssigneeId(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+              >
+                <option value="">担当者未設定</option>
+                {members.map((m) => (
+                  <option key={m.user_id} value={m.user_id}>
+                    {(Array.isArray(m.profile) ? m.profile[0]?.display_name : m.profile?.display_name) ?? m.user_id}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <textarea
@@ -169,10 +266,17 @@ export default function ContentPage() {
             {/* 変更履歴 */}
             <div className="mt-6 border-t border-slate-100 pt-4">
               <p className="mb-2 text-xs font-medium text-slate-500">変更履歴</p>
-              <div className="space-y-1 text-xs text-slate-400">
-                <p>v2 佐藤花子 — レビュー依頼</p>
-                <p>v1 田中太郎 — 作成</p>
-              </div>
+              {history.length === 0 ? (
+                <p className="text-xs text-slate-300">履歴はまだありません</p>
+              ) : (
+                <div className="space-y-1 text-xs text-slate-400">
+                  {history.map((h) => (
+                    <p key={h.id}>
+                      {(Array.isArray(h.profile) ? h.profile[0]?.display_name : h.profile?.display_name) ?? '不明'} — {h.metadata?.status ?? h.action} ({new Date(h.created_at).toLocaleDateString('ja-JP')})
+                    </p>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -184,7 +288,7 @@ export default function ContentPage() {
 
             {isMock && (
               <div className="mb-3 rounded-lg bg-yellow-50 px-3 py-2 text-xs text-yellow-700">
-                モードモード（APIキー未設定）
+                モックモード（APIキー未設定）
               </div>
             )}
 
@@ -237,6 +341,14 @@ export default function ContentPage() {
           </div>
         </div>
       </div>
+
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
     </div>
   )
 }

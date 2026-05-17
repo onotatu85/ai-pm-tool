@@ -38,6 +38,12 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
         </div>
         <div className="flex gap-2">
           <Link
+            href={`/projects/${id}/edit`}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            編集
+          </Link>
+          <Link
             href={`/projects/${id}/contents/new`}
             className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600"
           >

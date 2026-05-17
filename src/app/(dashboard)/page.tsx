@@ -7,7 +7,7 @@ export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: projects } = await supabase
     .from('projects')
-    .select('*')
+    .select('*, contents(status)')
     .order('updated_at', { ascending: false })
 
   return (
@@ -21,7 +21,7 @@ export default async function DashboardPage() {
           ＋ 新規プロジェクト作成
         </Link>
       </div>
-      <ProjectList projects={(projects ?? []) as Project[]} />
+      <ProjectList projects={(projects ?? []) as (Project & { contents: { status: string }[] })[]} />
     </div>
   )
 }

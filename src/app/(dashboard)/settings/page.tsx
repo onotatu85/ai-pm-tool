@@ -11,9 +11,12 @@ const roleBadge: Record<string, string> = {
   viewer: 'bg-slate-100 text-slate-600',
 }
 
-const statusBadge: Record<string, string> = {
-  active: 'bg-green-100 text-green-700',
-  invited: 'bg-yellow-100 text-yellow-700',
+type MemberItem = {
+  id: string
+  user_id: string
+  role: string
+  joined_at: string
+  profile: { display_name: string } | { display_name: string }[] | null
 }
 
 export default function SettingsPage() {
@@ -32,10 +35,43 @@ export default function SettingsPage() {
   const [passwordMsg, setPasswordMsg] = useState('')
   const [passwordSaving, setPasswordSaving] = useState(false)
 
-  // メンバー（モック）
-  const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState('member')
+  // メンバー管理
+  const [members, setMembers] = useState<MemberItem[]>([])
+  const [orgId, setOrgId] = useState<string>('')
+  const [membersLoading, setMembersLoading] = useState(false)
+  const [currentUserRole, setCurrentUserRole] = useState('')
 
+  async function loadMembers(orgIdParam: string) {
+    setMembersLoading(true)
+    const { data } = await supabase
+      .from('org_members')
+      .select('id, user_id, role, joined_at, profile:profiles(display_name)')
+      .eq('organization_id', orgIdParam)
+      .order('joined_at')
+    if (data) setMembers(data as unknown as MemberItem[])
+    setMembersLoading(false)
+  }
+
+  async function handleRoleChange(memberId: string, newRole: string) {
+    const { error } = await supabase
+      .from('org_members')
+      .update({ role: newRole })
+      .eq('id', memberId)
+    if (!error) await loadMembers(orgId)
+  }
+
+  async function handleRemoveMember(memberId: string, userId: string) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (userId === user?.id) { alert('自分自身は削除できません'); return }
+    if (!confirm('このメンバーを削除しますか？')) return
+    const { error } = await supabase
+      .from('org_members')
+      .delete()
+      .eq('id', memberId)
+    if (!error) await loadMembers(orgId)
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     async function loadProfile() {
       const { data: { user } } = await supabase.auth.getUser()
@@ -43,6 +79,18 @@ export default function SettingsPage() {
       setEmail(user.email ?? '')
       const { data } = await supabase.from('profiles').select('display_name').eq('id', user.id).single()
       if (data) setDisplayName(data.display_name ?? '')
+
+      // org取得
+      const { data: membership } = await supabase
+        .from('org_members')
+        .select('organization_id, role')
+        .eq('user_id', user.id)
+        .single()
+      if (membership) {
+        setOrgId(membership.organization_id)
+        setCurrentUserRole(membership.role)
+        await loadMembers(membership.organization_id)
+      }
     }
     loadProfile()
   }, [])
@@ -154,59 +202,62 @@ export default function SettingsPage() {
           {activeTab === 'members' && (
             <div>
               <h2 className="mb-6 text-lg font-semibold text-slate-800">メンバー管理</h2>
-              <div className="mb-4 rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700">
-                メンバー招待機能は近日公開予定です
+
+              {/* 招待フォーム（現在は説明のみ） */}
+              <div className="mb-6 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                メンバーの招待はSupabase Dashboardから行うか、招待機能（近日公開予定）をご利用ください。
               </div>
-              <div className="mb-6 flex gap-2 opacity-50">
-                <input
-                  type="email"
-                  placeholder="メールアドレスを入力..."
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  disabled
-                  className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none"
-                />
-                <select
-                  value={inviteRole}
-                  onChange={(e) => setInviteRole(e.target.value)}
-                  disabled
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                >
-                  <option value="member">メンバー</option>
-                  <option value="viewer">閲覧者</option>
-                  <option value="admin">管理者</option>
-                </select>
-                <button disabled className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white">
-                  招待
-                </button>
-              </div>
-              <table className="w-full text-sm">
-                <thead className="border-b border-slate-200">
-                  <tr>
-                    <th className="pb-3 text-left font-medium text-slate-600">名前</th>
-                    <th className="pb-3 text-left font-medium text-slate-600">ロール</th>
-                    <th className="pb-3 text-left font-medium text-slate-600">ステータス</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  <tr>
-                    <td className="py-3">
-                      <p className="font-medium text-slate-800">{displayName || '—'}</p>
-                      <p className="text-xs text-slate-400">{email}</p>
-                    </td>
-                    <td className="py-3">
-                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${roleBadge.admin}`}>
-                        admin
-                      </span>
-                    </td>
-                    <td className="py-3">
-                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${statusBadge.active}`}>
-                        active
-                      </span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+
+              {/* メンバー一覧 */}
+              {membersLoading ? (
+                <p className="text-sm text-slate-400">読み込み中...</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="border-b border-slate-200">
+                    <tr>
+                      <th className="pb-3 text-left font-medium text-slate-600">名前</th>
+                      <th className="pb-3 text-left font-medium text-slate-600">ロール</th>
+                      <th className="pb-3 text-left font-medium text-slate-600">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {members.map((m) => (
+                      <tr key={m.id}>
+                        <td className="py-3">
+                          <p className="font-medium text-slate-800">{(Array.isArray(m.profile) ? m.profile[0]?.display_name : m.profile?.display_name) ?? '—'}</p>
+                        </td>
+                        <td className="py-3">
+                          {currentUserRole === 'admin' ? (
+                            <select
+                              value={m.role}
+                              onChange={(e) => handleRoleChange(m.id, e.target.value)}
+                              className="rounded border border-slate-300 px-2 py-1 text-xs"
+                            >
+                              <option value="admin">admin</option>
+                              <option value="member">member</option>
+                              <option value="viewer">viewer</option>
+                            </select>
+                          ) : (
+                            <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${roleBadge[m.role] ?? ''}`}>
+                              {m.role}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3">
+                          {currentUserRole === 'admin' && (
+                            <button
+                              onClick={() => handleRemoveMember(m.id, m.user_id)}
+                              className="text-xs text-red-500 hover:underline"
+                            >
+                              削除
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           )}
 
