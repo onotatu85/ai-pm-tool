@@ -1,12 +1,19 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ContentStatusBadge } from '@/components/StatusBadge'
 import type { Content, ContentStatus, AiPromptType } from '@/lib/types'
 import { useRouter, useParams } from 'next/navigation'
 import Toast from '@/components/Toast'
+
+// ロール別に許可されるステータス
+const STATUS_BY_ROLE: Record<string, ContentStatus[]> = {
+  admin:  ['draft', 'review', 'approved', 'published'],
+  member: ['draft', 'review'],
+  viewer: [],
+}
 
 type MemberItem = {
   user_id: string
@@ -50,6 +57,7 @@ export default function ContentPage() {
   const [saving, setSaving] = useState(false)
   const [assigneeId, setAssigneeId] = useState('')
   const [members, setMembers] = useState<MemberItem[]>([])
+  const [currentUserRole, setCurrentUserRole] = useState<string>('viewer')
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [aiTab, setAiTab] = useState<AiPromptType>('improve')
   const [aiResult, setAiResult] = useState('')
@@ -85,11 +93,17 @@ export default function ContentPage() {
 
         const orgId = (contentData as Content & { project: { organization_id: string } }).project?.organization_id
         if (orgId) {
+          const { data: { user } } = await supabase.auth.getUser()
           const { data: memberData } = await supabase
             .from('org_members')
             .select('user_id, role, profile:profiles(display_name)')
             .eq('organization_id', orgId)
-          if (memberData) setMembers(memberData as unknown as MemberItem[])
+          if (memberData) {
+            setMembers(memberData as unknown as MemberItem[])
+            // ログインユーザー自身のロールを特定
+            const myEntry = memberData.find((m) => m.user_id === user?.id)
+            setCurrentUserRole(myEntry?.role ?? 'viewer')
+          }
         }
 
         await loadHistory(contentId)
@@ -99,6 +113,16 @@ export default function ContentPage() {
   }, [contentId])
 
   async function handleSave() {
+    // viewer は保存不可
+    if (currentUserRole === 'viewer') {
+      setToast({ message: '閲覧者は編集できません', type: 'error' })
+      return
+    }
+    // member は approved/published を設定不可
+    if (currentUserRole === 'member' && (status === 'approved' || status === 'published')) {
+      setToast({ message: 'このステータスを設定する権限がありません', type: 'error' })
+      return
+    }
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
     const { error } = await supabase.from('contents').update({
@@ -170,6 +194,11 @@ export default function ContentPage() {
     if (aiResult) setBody((prev) => prev + '\n\n' + aiResult)
   }
 
+  // ロールに応じた選択可能ステータス
+  const allowedStatuses = useMemo(() => STATUS_BY_ROLE[currentUserRole] ?? [], [currentUserRole])
+  const isReadOnly = currentUserRole === 'viewer'
+  const canDelete = currentUserRole === 'admin'
+
   if (!content) {
     return (
       <div className="flex h-40 items-center justify-center text-slate-400">読み込み中...</div>
@@ -190,32 +219,63 @@ export default function ContentPage() {
         {/* 左パネル: 編集エリア */}
         <div className="flex-1 min-w-0">
           <div className="rounded-xl border border-slate-200 bg-white p-6">
+
+            {/* ロール表示バナー */}
+            {isReadOnly && (
+              <div className="mb-4 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500 border border-slate-200">
+                👁 閲覧者モード — このコンテンツは編集できません
+              </div>
+            )}
+            {currentUserRole === 'member' && (
+              <div className="mb-4 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-600">
+                ✏️ メンバーモード — Draft・Review のみ設定できます
+              </div>
+            )}
+
             <div className="mb-4">
               <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-lg font-semibold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                disabled={isReadOnly}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-lg font-semibold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-500"
               />
             </div>
 
             <div className="mb-4 flex flex-wrap items-center gap-3">
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as ContentStatus)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
-              >
-                {STATUS_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>{opt.label}</option>
-                ))}
-              </select>
-              <div className="flex items-center">
-                <ContentStatusBadge status={status} />
-              </div>
+              {isReadOnly ? (
+                /* viewer はステータスを読み取り専用で表示 */
+                <div className="flex items-center gap-3">
+                  <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">{status}</span>
+                  <ContentStatusBadge status={status} />
+                </div>
+              ) : (
+                <>
+                  <select
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value as ContentStatus)}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                  >
+                    {STATUS_OPTIONS.map((opt) => (
+                      <option
+                        key={opt.value}
+                        value={opt.value}
+                        disabled={!allowedStatuses.includes(opt.value)}
+                      >
+                        {opt.label}{!allowedStatuses.includes(opt.value) ? ' (権限なし)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex items-center">
+                    <ContentStatusBadge status={status} />
+                  </div>
+                </>
+              )}
               <select
                 value={assigneeId}
                 onChange={(e) => setAssigneeId(e.target.value)}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                disabled={isReadOnly}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:bg-slate-50 disabled:text-slate-500"
               >
                 <option value="">担当者未設定</option>
                 {members.map((m) => (
@@ -230,8 +290,9 @@ export default function ContentPage() {
               value={body}
               onChange={(e) => setBody(e.target.value)}
               rows={12}
+              disabled={isReadOnly}
               placeholder="コンテンツ本文を入力..."
-              className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm leading-relaxed outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm leading-relaxed outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-500"
             />
 
             <div className="mt-4 flex items-center gap-2">
@@ -239,28 +300,34 @@ export default function ContentPage() {
                 onClick={() => router.back()}
                 className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
               >
-                キャンセル
+                {isReadOnly ? '戻る' : 'キャンセル'}
               </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-              >
-                下書き保存
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={saving}
-                className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
-              >
-                {saving ? '保存中...' : '保存'}
-              </button>
-              <button
-                onClick={handleDelete}
-                className="ml-auto rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50"
-              >
-                削除
-              </button>
+              {!isReadOnly && (
+                <>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    下書き保存
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+                  >
+                    {saving ? '保存中...' : '保存'}
+                  </button>
+                </>
+              )}
+              {canDelete && (
+                <button
+                  onClick={handleDelete}
+                  className="ml-auto rounded-lg border border-red-200 px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                >
+                  削除
+                </button>
+              )}
             </div>
 
             {/* 変更履歴 */}
