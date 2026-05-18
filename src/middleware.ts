@@ -29,8 +29,13 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl
   const isAuthPage = pathname.startsWith('/login') || pathname.startsWith('/signup')
+  const isApiRoute = pathname.startsWith('/api/')
 
   if (!user && !isAuthPage) {
+    // API ルートは JSON で 401 を返す（リダイレクトではなく）
+    if (isApiRoute) {
+      return NextResponse.json({ error: '認証が必要です' }, { status: 401 })
+    }
     return NextResponse.redirect(new URL('/login', request.url))
   }
 

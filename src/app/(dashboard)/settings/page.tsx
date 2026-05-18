@@ -40,6 +40,11 @@ export default function SettingsPage() {
   const [orgId, setOrgId] = useState<string>('')
   const [membersLoading, setMembersLoading] = useState(false)
   const [currentUserRole, setCurrentUserRole] = useState('')
+  // 招待フォーム
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState('member')
+  const [inviteSending, setInviteSending] = useState(false)
+  const [inviteMsg, setInviteMsg] = useState<{ text: string; isError: boolean } | null>(null)
 
   async function loadMembers(orgIdParam: string) {
     setMembersLoading(true)
@@ -58,6 +63,31 @@ export default function SettingsPage() {
       .update({ role: newRole })
       .eq('id', memberId)
     if (!error) await loadMembers(orgId)
+  }
+
+  async function handleInvite() {
+    if (!inviteEmail) { setInviteMsg({ text: 'メールアドレスを入力してください', isError: true }); return }
+    if (!orgId) { setInviteMsg({ text: '組織情報が取得できません', isError: true }); return }
+    setInviteSending(true)
+    setInviteMsg(null)
+    try {
+      const res = await fetch('/api/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: inviteEmail, role: inviteRole, organizationId: orgId }),
+      })
+      const data = await res.json() as { message?: string; error?: string }
+      if (res.ok) {
+        setInviteMsg({ text: data.message ?? '招待しました', isError: false })
+        setInviteEmail('')
+        await loadMembers(orgId)
+      } else {
+        setInviteMsg({ text: data.error ?? '招待に失敗しました', isError: true })
+      }
+    } catch {
+      setInviteMsg({ text: 'ネットワークエラーが発生しました', isError: true })
+    }
+    setInviteSending(false)
   }
 
   async function handleRemoveMember(memberId: string, userId: string) {
@@ -203,10 +233,46 @@ export default function SettingsPage() {
             <div>
               <h2 className="mb-6 text-lg font-semibold text-slate-800">メンバー管理</h2>
 
-              {/* 招待フォーム（現在は説明のみ） */}
-              <div className="mb-6 rounded-lg bg-blue-50 px-4 py-3 text-sm text-blue-700">
-                メンバーの招待はSupabase Dashboardから行うか、招待機能（近日公開予定）をご利用ください。
-              </div>
+              {/* 招待フォーム */}
+              {currentUserRole === 'admin' ? (
+                <div className="mb-6 rounded-lg border border-slate-200 p-4">
+                  <p className="mb-3 text-sm font-medium text-slate-700">メンバーを招待</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      placeholder="招待するメールアドレス"
+                      className="flex-1 min-w-48 rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    />
+                    <select
+                      value={inviteRole}
+                      onChange={(e) => setInviteRole(e.target.value)}
+                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                    >
+                      <option value="member">member</option>
+                      <option value="admin">admin</option>
+                      <option value="viewer">viewer</option>
+                    </select>
+                    <button
+                      onClick={handleInvite}
+                      disabled={inviteSending}
+                      className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+                    >
+                      {inviteSending ? '送信中...' : '招待'}
+                    </button>
+                  </div>
+                  {inviteMsg && (
+                    <p className={`mt-2 text-xs ${inviteMsg.isError ? 'text-red-600' : 'text-green-600'}`}>
+                      {inviteMsg.text}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="mb-6 rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                  メンバーの招待は管理者のみ行えます。
+                </div>
+              )}
 
               {/* メンバー一覧 */}
               {membersLoading ? (
