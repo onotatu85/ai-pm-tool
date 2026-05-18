@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { ProjectStatusBadge } from '@/components/StatusBadge'
 import ContentList from '@/components/ContentList'
+import ProjectFilesSection from '@/components/ProjectFilesSection'
 import type { Content } from '@/lib/types'
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
@@ -55,6 +56,11 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
       <ContentList
         contents={(contents ?? []) as (Content & { assignee: { display_name: string } | null })[]}
         projectId={id}
+      />
+
+      <ProjectFilesSection
+        projectId={id}
+        organizationId={project.organization_id}
       />
     </div>
   )

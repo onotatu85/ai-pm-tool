@@ -49,6 +49,20 @@ export interface Content {
   assignee?: Profile
 }
 
+export interface ProjectFile {
+  id: string
+  project_id: string
+  name: string
+  storage_path: string
+  mime_type: string
+  size_bytes: number
+  extracted_text: string | null
+  uploaded_by: string
+  created_at: string
+  updated_at: string
+  uploader?: { display_name: string }
+}
+
 export interface AiSession {
   id: string
   content_id: string

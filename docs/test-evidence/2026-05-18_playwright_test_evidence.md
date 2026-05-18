@@ -4,7 +4,7 @@
 **テストツール:** Playwright v1.60.0  
 **ブラウザ:** Chromium (headless)  
 **対象URL:** http://localhost:3000  
-**テスト対象バージョン:** commit `c92f90f` + middleware 認証修正
+**テスト対象バージョン:** ファイルアップロード機能実装完了版（Migration 006 適用済み）
 
 ---
 
@@ -12,11 +12,11 @@
 
 | 項目 | 件数 |
 |---|---|
-| **合計テスト数** | 10 |
-| ✅ **PASS** | 9 |
+| **合計テスト数** | 14 |
+| ✅ **PASS** | 13 |
 | ⏭️ **SKIP** | 1（認証情報未設定のため） |
 | ❌ **FAIL** | 0 |
-| **実行時間** | 4.8秒 |
+| **実行時間** | 9.5秒 |
 
 ---
 
@@ -41,6 +41,15 @@
 | 8 | 未認証で /api/invite POST すると 401 を返す | ✅ PASS | HTTP 401 確認 |
 | 9 | 必須フィールドなしで /api/invite POST すると 400 または 401 を返す | ✅ PASS | HTTP 401 確認（middleware 先行） |
 | 10 | 未ログインで /settings にアクセスするとリダイレクト | ✅ PASS | スクリーンショットあり |
+
+### ファイル: `tests/file-upload.spec.ts`
+
+| # | テスト名 | 結果 | 備考 |
+|---|---|---|---|
+| 11 | 未認証で /api/files/upload POST すると 401 を返す | ✅ PASS | HTTP 401 確認 |
+| 12 | 未認証で /api/files/:id GET すると 401 を返す | ✅ PASS | HTTP 401 確認 |
+| 13 | 未認証で /api/files/:id DELETE すると 401 を返す | ✅ PASS | HTTP 401 確認 |
+| 14 | 未ログインで /projects/:id にアクセスするとリダイレクト | ✅ PASS | スクリーンショットあり |
 
 ---
 
@@ -183,6 +192,32 @@
 
 ---
 
+---
+
+## ファイルアップロード機能 実装内容
+
+### 実装ファイル一覧
+
+| ファイル | 役割 |
+|---|---|
+| `src/app/api/files/upload/route.ts` | POST: ファイルアップロード API（認証・サイズ・MIME 検証→Storage→DB） |
+| `src/app/api/files/[fileId]/route.ts` | GET: 署名付きダウンロードURL生成 / DELETE: ファイル削除（admin only） |
+| `src/components/FileUpload.tsx` | ドラッグ&ドロップ + クリックアップロードUI |
+| `src/components/FileList.tsx` | ファイル一覧（ダウンロード・削除ボタン付き） |
+| `src/components/ProjectFilesSection.tsx` | 折りたたみパネル（ファイルセクション全体） |
+| `supabase/migrations/006_fix_files_fk.sql` | `uploaded_by` FK を `auth.users` から `public.profiles` に変更 |
+
+### 検証項目（API 認証テスト）
+
+| エンドポイント | 未認証アクセス | 期待値 | 実際値 | 判定 |
+|---|---|---|---|---|
+| POST /api/files/upload | Cookie なし | 401 | 401 | ✅ |
+| GET /api/files/:id | Cookie なし | 401 | 401 | ✅ |
+| DELETE /api/files/:id | Cookie なし | 401 | 401 | ✅ |
+| GET /projects/:id (UI) | 未ログイン | /login リダイレクト | /login リダイレクト | ✅ |
+
+---
+
 ## 今後の課題（自動テストに追加が必要なもの）
 
 | テスト内容 | 必要な環境 |
@@ -192,6 +227,10 @@
 | 閲覧者ロール: 読み取り専用モード表示 | テスト用 viewer ロールのアカウント |
 | 招待メール送信の正常系 | 管理者アカウント + テスト用メールアドレス |
 | コンテンツ保存・変更履歴記録 | ログイン済みアカウント |
+| ファイルアップロード正常系 (txt/pdf) | ログイン済み admin/member アカウント + `project-files` Supabase Storage バケット |
+| ファイルダウンロード（署名付き URL 取得） | ログイン済みアカウント + アップロード済みファイル |
+| ファイル削除 (admin only) | admin アカウント |
+| viewer によるアップロード拒否 | viewer ロールのアカウント |
 
 ---
 
