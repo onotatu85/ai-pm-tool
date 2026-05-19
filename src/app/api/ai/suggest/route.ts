@@ -54,11 +54,12 @@ export async function POST(request: Request) {
   // ============================================================
   // リクエストパラメータ検証
   // ============================================================
-  const { promptType, body, contentId, useProjectFiles } = (await request.json()) as {
+  const { promptType, body, contentId, useProjectFiles, selectedFileIds } = (await request.json()) as {
     promptType: string
     body: string
     contentId?: string
     useProjectFiles?: boolean
+    selectedFileIds?: string[]
   }
 
   if (!body?.trim()) {
@@ -75,7 +76,27 @@ export async function POST(request: Request) {
   // ============================================================
   const fileContexts: { name: string; text: string }[] = []
 
-  if (useProjectFiles && contentId) {
+  if (useProjectFiles && selectedFileIds && selectedFileIds.length > 0) {
+    // 選択されたファイルIDを指定して取得
+    const { data: files } = await supabase
+      .from('project_files')
+      .select('name, extracted_text')
+      .in('id', selectedFileIds)
+      .not('extracted_text', 'is', null)
+
+    if (files) {
+      let totalChars = 0
+      for (const f of files) {
+        if (!f.extracted_text) continue
+        const remaining = 6000 - totalChars
+        if (remaining <= 0) break
+        const text = f.extracted_text.slice(0, Math.min(2000, remaining))
+        fileContexts.push({ name: f.name, text })
+        totalChars += text.length
+      }
+    }
+  } else if (useProjectFiles && contentId) {
+    // selectedFileIds が未指定の場合は従来通り自動選択（後方互換）
     const { data: contentData } = await supabase
       .from('contents')
       .select('project_id')

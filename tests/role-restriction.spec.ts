@@ -93,7 +93,7 @@ test.describe('ログイン済み - ロール制限 UI 確認', () => {
     const href = await projectLink.getAttribute('href')
     if (href) {
       const parts = href.split('/')
-      projectId = parts[2]
+      projectId = parts[2] ?? ''
     }
     await context.close()
   })

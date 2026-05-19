@@ -66,7 +66,8 @@ export default function ContentPage() {
   const [aiLoading, setAiLoading] = useState(false)
   const [isMock, setIsMock] = useState(false)
   const [useProjectFiles, setUseProjectFiles] = useState(false)
-  const [projectFileCount, setProjectFileCount] = useState(0)
+  const [projectFiles, setProjectFiles] = useState<{ id: string; name: string }[]>([])
+  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([])
   const [filesUsed, setFilesUsed] = useState<string[]>([])
 
   const [history, setHistory] = useState<HistoryItem[]>([])
@@ -111,13 +112,18 @@ export default function ContentPage() {
           }
         }
 
-        // プロジェクトファイル数を取得（RAG チェックボックスの活性制御用）
-        const { count } = await supabase
+        // テキスト抽出済みのプロジェクトファイル一覧を取得
+        const { data: fileData } = await supabase
           .from('project_files')
-          .select('id', { count: 'exact', head: true })
+          .select('id, name')
           .eq('project_id', contentData.project_id)
           .not('extracted_text', 'is', null)
-        setProjectFileCount(count ?? 0)
+          .order('created_at', { ascending: false })
+        if (fileData) {
+          setProjectFiles(fileData)
+          // デフォルト：全ファイルを選択済みにする
+          setSelectedFileIds(fileData.map((f) => f.id))
+        }
 
         await loadHistory(contentId)
       }
@@ -191,7 +197,8 @@ export default function ContentPage() {
           promptType: aiTab,
           body,
           contentId,
-          useProjectFiles: useProjectFiles && projectFileCount > 0,
+          useProjectFiles: useProjectFiles && selectedFileIds.length > 0,
+          selectedFileIds: useProjectFiles ? selectedFileIds : [],
         }),
       })
 
@@ -259,7 +266,7 @@ export default function ContentPage() {
             model: 'claude-haiku-4-5',
             status: 'completed',
             created_by: user.id,
-            use_project_files: useProjectFiles && projectFileCount > 0,
+            use_project_files: useProjectFiles && selectedFileIds.length > 0,
             files_used: localFilesUsed,
           })
         }
@@ -479,27 +486,83 @@ export default function ContentPage() {
 
             {/* プロジェクト資料参照チェックボックス */}
             <div className="mb-4">
-              <label className={`flex items-center gap-2 text-xs ${projectFileCount === 0 ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
+              <label className={`flex items-center gap-2 text-xs ${projectFiles.length === 0 ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
                 <input
                   type="checkbox"
                   checked={useProjectFiles}
                   onChange={(e) => setUseProjectFiles(e.target.checked)}
-                  disabled={projectFileCount === 0}
+                  disabled={projectFiles.length === 0}
                   className="h-3.5 w-3.5 rounded border-slate-300 accent-blue-500"
                 />
-                <span className="text-slate-600">プロジェクト資料を参照</span>
+                <span className="font-medium text-slate-600">プロジェクト資料を参照</span>
               </label>
-              <p className="mt-1 pl-5 text-xs text-slate-400">
-                {projectFileCount === 0
-                  ? 'テキスト抽出済みのファイルがありません'
-                  : `${projectFileCount}件のファイルを参照可能`}
-              </p>
+
+              {/* ファイル個別選択リスト */}
+              {useProjectFiles && projectFiles.length > 0 && (
+                <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-xs text-slate-500">参照するファイルを選択</span>
+                    <div className="flex gap-2 text-xs text-blue-500">
+                      <button
+                        onClick={() => setSelectedFileIds(projectFiles.map((f) => f.id))}
+                        className="hover:underline"
+                      >
+                        全選択
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        onClick={() => setSelectedFileIds([])}
+                        className="hover:underline"
+                      >
+                        全解除
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    {projectFiles.map((file) => (
+                      <label key={file.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-slate-100">
+                        <input
+                          type="checkbox"
+                          checked={selectedFileIds.includes(file.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedFileIds((prev) => [...prev, file.id])
+                            } else {
+                              setSelectedFileIds((prev) => prev.filter((id) => id !== file.id))
+                            }
+                          }}
+                          className="h-3 w-3 accent-blue-500"
+                        />
+                        <span className="truncate text-slate-700" title={file.name}>
+                          {file.name}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-right text-xs text-slate-400">
+                    {selectedFileIds.length} / {projectFiles.length} 件選択中
+                  </p>
+                </div>
+              )}
+
+              {projectFiles.length === 0 && (
+                <p className="mt-1 pl-5 text-xs text-slate-400">
+                  テキスト抽出済みのファイルがありません
+                </p>
+              )}
             </div>
+
+            {/* ファイルが1件も選択されていない場合の警告 */}
+            {useProjectFiles && selectedFileIds.length === 0 && (
+              <p className="mb-2 text-xs text-amber-600">
+                ⚠ ファイルを1件以上選択してください
+              </p>
+            )}
 
             {/* AI提案生成ボタン */}
             <button
               onClick={handleAiSuggest}
-              disabled={aiLoading || !body.trim()}
+              disabled={aiLoading || !body.trim() || (useProjectFiles && selectedFileIds.length === 0)}
               className="mb-4 w-full rounded-lg bg-blue-500 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
             >
               {aiLoading ? '生成中...' : 'AI提案を生成'}
