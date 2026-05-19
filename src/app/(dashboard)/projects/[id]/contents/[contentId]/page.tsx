@@ -59,10 +59,16 @@ export default function ContentPage() {
   const [members, setMembers] = useState<MemberItem[]>([])
   const [currentUserRole, setCurrentUserRole] = useState<string>('viewer')
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+
+  // AI 提案関連
   const [aiTab, setAiTab] = useState<AiPromptType>('improve')
   const [aiResult, setAiResult] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const [isMock, setIsMock] = useState(false)
+  const [useProjectFiles, setUseProjectFiles] = useState(false)
+  const [projectFileCount, setProjectFileCount] = useState(0)
+  const [filesUsed, setFilesUsed] = useState<string[]>([])
+
   const [history, setHistory] = useState<HistoryItem[]>([])
 
   async function loadHistory(cid: string) {
@@ -100,11 +106,18 @@ export default function ContentPage() {
             .eq('organization_id', orgId)
           if (memberData) {
             setMembers(memberData as unknown as MemberItem[])
-            // ログインユーザー自身のロールを特定
             const myEntry = memberData.find((m) => m.user_id === user?.id)
             setCurrentUserRole(myEntry?.role ?? 'viewer')
           }
         }
+
+        // プロジェクトファイル数を取得（RAG チェックボックスの活性制御用）
+        const { count } = await supabase
+          .from('project_files')
+          .select('id', { count: 'exact', head: true })
+          .eq('project_id', contentData.project_id)
+          .not('extracted_text', 'is', null)
+        setProjectFileCount(count ?? 0)
 
         await loadHistory(contentId)
       }
@@ -113,12 +126,10 @@ export default function ContentPage() {
   }, [contentId])
 
   async function handleSave() {
-    // viewer は保存不可
     if (currentUserRole === 'viewer') {
       setToast({ message: '閲覧者は編集できません', type: 'error' })
       return
     }
-    // member は approved/published を設定不可
     if (currentUserRole === 'member' && (status === 'approved' || status === 'published')) {
       setToast({ message: 'このステータスを設定する権限がありません', type: 'error' })
       return
@@ -161,40 +172,132 @@ export default function ContentPage() {
   }
 
   async function handleAiSuggest() {
+    if (!body.trim()) {
+      setToast({ message: 'コンテンツ本文を入力してください', type: 'error' })
+      return
+    }
     setAiLoading(true)
     setAiResult('')
+    setFilesUsed([])
+    setIsMock(false)
 
     const { data: { user } } = await supabase.auth.getUser()
 
-    const res = await fetch('/api/ai/suggest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ promptType: aiTab, body }),
-    })
-    const data = await res.json() as { response: string; isMock: boolean; model?: string }
-    setAiResult(data.response)
-    setIsMock(data.isMock)
-
-    if (!data.isMock && user) {
-      await supabase.from('ai_sessions').insert({
-        content_id: contentId,
-        prompt_type: aiTab,
-        prompt_text: body,
-        response: data.response,
-        model: data.model ?? 'claude-haiku-4-5',
-        status: 'completed',
-        created_by: user.id,
+    try {
+      const res = await fetch('/api/ai/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          promptType: aiTab,
+          body,
+          contentId,
+          useProjectFiles: useProjectFiles && projectFileCount > 0,
+        }),
       })
-    }
 
-    setAiLoading(false)
+      if (!res.ok) {
+        const err = await res.json() as { error?: string }
+        setToast({ message: err.error ?? 'AI提案の生成に失敗しました', type: 'error' })
+        return
+      }
+
+      const contentType = res.headers.get('content-type') ?? ''
+
+      if (contentType.includes('text/event-stream')) {
+        // ========== SSE ストリーミング ==========
+        const reader = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let fullText = ''
+        let localFilesUsed: string[] = []
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          // 完結した行を処理
+          let newlineIdx: number
+          while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newlineIdx).trimEnd()
+            buffer = buffer.slice(newlineIdx + 1)
+
+            if (!line.startsWith('data: ')) continue
+            const payload = line.slice(6)
+            if (payload === '[DONE]') continue
+
+            try {
+              const json = JSON.parse(payload) as {
+                chunk?: string
+                filesUsed?: string[]
+                error?: string
+              }
+              if (json.chunk) {
+                fullText += json.chunk
+                setAiResult(fullText)
+              }
+              if (json.filesUsed) {
+                localFilesUsed = json.filesUsed
+                setFilesUsed(json.filesUsed)
+              }
+              if (json.error) {
+                setToast({ message: json.error, type: 'error' })
+              }
+            } catch {
+              // JSON パースエラーは無視
+            }
+          }
+        }
+
+        // ai_sessions に記録
+        if (fullText && user) {
+          await supabase.from('ai_sessions').insert({
+            content_id: contentId,
+            prompt_type: aiTab,
+            prompt_text: body,
+            response: fullText,
+            model: 'claude-haiku-4-5',
+            status: 'completed',
+            created_by: user.id,
+            use_project_files: useProjectFiles && projectFileCount > 0,
+            files_used: localFilesUsed,
+          })
+        }
+      } else {
+        // ========== JSON レスポンス（モックモード）==========
+        const data = await res.json() as {
+          response: string
+          isMock: boolean
+          model?: string
+          filesUsed?: string[]
+        }
+        setAiResult(data.response)
+        setIsMock(data.isMock)
+        if (data.filesUsed) setFilesUsed(data.filesUsed)
+
+        if (!data.isMock && user) {
+          await supabase.from('ai_sessions').insert({
+            content_id: contentId,
+            prompt_type: aiTab,
+            prompt_text: body,
+            response: data.response,
+            model: data.model ?? 'claude-haiku-4-5',
+            status: 'completed',
+            created_by: user.id,
+          })
+        }
+      }
+    } catch {
+      setToast({ message: 'ネットワークエラーが発生しました', type: 'error' })
+    } finally {
+      setAiLoading(false)
+    }
   }
 
   function applyAiResult() {
     if (aiResult) setBody((prev) => prev + '\n\n' + aiResult)
   }
 
-  // ロールに応じた選択可能ステータス
   const allowedStatuses = useMemo(() => STATUS_BY_ROLE[currentUserRole] ?? [], [currentUserRole])
   const isReadOnly = currentUserRole === 'viewer'
   const canDelete = currentUserRole === 'admin'
@@ -220,7 +323,6 @@ export default function ContentPage() {
         <div className="flex-1 min-w-0">
           <div className="rounded-xl border border-slate-200 bg-white p-6">
 
-            {/* ロール表示バナー */}
             {isReadOnly && (
               <div className="mb-4 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-500 border border-slate-200">
                 👁 閲覧者モード — このコンテンツは編集できません
@@ -244,7 +346,6 @@ export default function ContentPage() {
 
             <div className="mb-4 flex flex-wrap items-center gap-3">
               {isReadOnly ? (
-                /* viewer はステータスを読み取り専用で表示 */
                 <div className="flex items-center gap-3">
                   <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">{status}</span>
                   <ContentStatusBadge status={status} />
@@ -359,6 +460,7 @@ export default function ContentPage() {
               </div>
             )}
 
+            {/* 提案タイプ タブ */}
             <div className="mb-4 flex rounded-lg border border-slate-200 p-0.5">
               {AI_TABS.map((tab) => (
                 <button
@@ -375,21 +477,58 @@ export default function ContentPage() {
               ))}
             </div>
 
+            {/* プロジェクト資料参照チェックボックス */}
+            <div className="mb-4">
+              <label className={`flex items-center gap-2 text-xs ${projectFileCount === 0 ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
+                <input
+                  type="checkbox"
+                  checked={useProjectFiles}
+                  onChange={(e) => setUseProjectFiles(e.target.checked)}
+                  disabled={projectFileCount === 0}
+                  className="h-3.5 w-3.5 rounded border-slate-300 accent-blue-500"
+                />
+                <span className="text-slate-600">プロジェクト資料を参照</span>
+              </label>
+              <p className="mt-1 pl-5 text-xs text-slate-400">
+                {projectFileCount === 0
+                  ? 'テキスト抽出済みのファイルがありません'
+                  : `${projectFileCount}件のファイルを参照可能`}
+              </p>
+            </div>
+
+            {/* AI提案生成ボタン */}
             <button
               onClick={handleAiSuggest}
-              disabled={aiLoading || !body}
+              disabled={aiLoading || !body.trim()}
               className="mb-4 w-full rounded-lg bg-blue-500 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
             >
               {aiLoading ? '生成中...' : 'AI提案を生成'}
             </button>
 
+            {/* ストリーミング中のインジケーター */}
+            {aiLoading && aiResult && (
+              <div className="mb-1 flex items-center gap-1 text-xs text-blue-500">
+                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
+                生成中...
+              </div>
+            )}
+
+            {/* 提案結果 */}
             {aiResult && (
-              <div className="mb-4 rounded-lg bg-blue-50 p-3 text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">
+              <div className="mb-3 rounded-lg bg-blue-50 p-3 text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">
                 {aiResult}
               </div>
             )}
 
-            {aiResult && (
+            {/* 参照したファイル表示 */}
+            {filesUsed.length > 0 && (
+              <div className="mb-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                📎 参照した資料: {filesUsed.join('、')}
+              </div>
+            )}
+
+            {/* 適用・却下ボタン */}
+            {aiResult && !aiLoading && (
               <div className="flex items-center gap-2">
                 <button
                   onClick={applyAiResult}
@@ -398,7 +537,7 @@ export default function ContentPage() {
                   本文に適用
                 </button>
                 <button
-                  onClick={() => setAiResult('')}
+                  onClick={() => { setAiResult(''); setFilesUsed([]) }}
                   className="text-xs text-slate-400 hover:text-slate-600"
                 >
                   却下
