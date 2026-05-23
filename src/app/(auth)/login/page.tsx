@@ -3,16 +3,20 @@
 import Link from 'next/link'
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Suspense } from 'react'
 
-export default function LoginPage() {
+function LoginForm() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
+  const searchParams = useSearchParams()
   const supabase = createClient()
+
+  const hasError = searchParams.get('error') === 'invalid_link'
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -36,6 +40,11 @@ export default function LoginPage() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
+        {hasError && (
+          <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">
+            リセットリンクが無効または期限切れです。再度お試しください。
+          </div>
+        )}
         {error && (
           <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>
         )}
@@ -84,7 +93,7 @@ export default function LoginPage() {
       </form>
 
       <div className="mt-4 text-center">
-        <Link href="#" className="text-sm text-blue-500 hover:underline">
+        <Link href="/forgot-password" className="text-sm text-blue-500 hover:underline">
           パスワードをお忘れですか？
         </Link>
       </div>
@@ -101,5 +110,13 @@ export default function LoginPage() {
         </Link>
       </div>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   )
 }

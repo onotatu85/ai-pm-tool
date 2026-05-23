@@ -28,10 +28,19 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   const { pathname } = request.nextUrl
-  const isAuthPage = pathname.startsWith('/login') || pathname.startsWith('/signup')
+
+  // 未認証でもアクセス可能なページ（ログイン済みなら / にリダイレクト）
+  const isAuthPage =
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/signup') ||
+    pathname.startsWith('/forgot-password')
+
+  // 未認証でもアクセス可能なルート（認証済みでもそのまま通す）
+  const isPublicRoute = pathname.startsWith('/auth/')
+
   const isApiRoute = pathname.startsWith('/api/')
 
-  if (!user && !isAuthPage) {
+  if (!user && !isAuthPage && !isPublicRoute) {
     // API ルートは JSON で 401 を返す（リダイレクトではなく）
     if (isApiRoute) {
       return NextResponse.json({ error: '認証が必要です' }, { status: 401 })

@@ -1,7 +1,12 @@
-export type ProjectStatus = 'active' | 'archived' | 'completed'
+export type ProjectStatus = 'planning' | 'active' | 'completed' | 'archived'
 export type ContentStatus = 'draft' | 'review' | 'approved' | 'published'
 export type OrgRole = 'admin' | 'member' | 'viewer'
 export type AiPromptType = 'improve' | 'summarize' | 'seo' | 'tone'
+
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
 
 export interface Profile {
   id: string

@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react'
 import Link from 'next/link'
-import { ProjectStatusBadge } from '@/components/StatusBadge'
+import { ProjectStatusBadge, PROJECT_STATUS_OPTIONS } from '@/components/StatusBadge'
 import type { Project, ProjectStatus } from '@/lib/types'
 
 type ProjectWithContents = Project & { contents?: { status: string }[] }
@@ -17,14 +17,22 @@ function formatRelativeDate(dateStr: string): string {
   return `${Math.floor(days / 30)}ヶ月前`
 }
 
+// draft=0%, review=50%, approved=75%, published=100%
 function getProgress(contents: { status: string }[] = []) {
   const total = contents.length
   if (total === 0) return { total: 0, published: 0, pct: 0 }
   const published = contents.filter((c) => c.status === 'published').length
-  const approved = contents.filter((c) => c.status === 'approved').length
-  const review = contents.filter((c) => c.status === 'review').length
-  const pct = Math.round(((published * 1 + approved * 0.75 + review * 0.4) / total) * 100)
+  const approved  = contents.filter((c) => c.status === 'approved').length
+  const review    = contents.filter((c) => c.status === 'review').length
+  const pct = Math.round(((published * 1.0 + approved * 0.75 + review * 0.5) / total) * 100)
   return { total, published, pct: Math.min(pct, 100) }
+}
+
+function progressColor(pct: number) {
+  if (pct >= 100) return 'bg-green-500'
+  if (pct >= 60)  return 'bg-blue-400'
+  if (pct >= 30)  return 'bg-yellow-400'
+  return 'bg-slate-300'
 }
 
 export default function ProjectList({ projects }: { projects: ProjectWithContents[] }) {
@@ -56,9 +64,9 @@ export default function ProjectList({ projects }: { projects: ProjectWithContent
           className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500"
         >
           <option value="">すべて</option>
-          <option value="active">Active</option>
-          <option value="completed">Completed</option>
-          <option value="archived">Archived</option>
+          {PROJECT_STATUS_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>{opt.label}</option>
+          ))}
         </select>
       </div>
 
@@ -84,13 +92,17 @@ export default function ProjectList({ projects }: { projects: ProjectWithContent
                 const { total, published, pct } = getProgress((project as ProjectWithContents).contents)
                 return total > 0 ? (
                   <div className="mt-3">
-                    <div className="mb-1 flex justify-between text-xs text-slate-400">
+                    <div className="mb-1 flex items-center justify-between text-xs text-slate-400">
                       <span>{total}件のコンテンツ</span>
-                      <span>{published}件公開済み</span>
+                      <span className="font-semibold text-slate-600">{pct}%</span>
                     </div>
-                    <div className="h-1.5 w-full rounded-full bg-slate-100">
-                      <div className="h-1.5 rounded-full bg-blue-400 transition-all" style={{ width: `${pct}%` }} />
+                    <div className="h-2 w-full rounded-full bg-slate-100">
+                      <div
+                        className={`h-2 rounded-full transition-all ${progressColor(pct)}`}
+                        style={{ width: `${pct}%` }}
+                      />
                     </div>
+                    <p className="mt-1 text-right text-xs text-slate-400">{published}件公開済み</p>
                   </div>
                 ) : (
                   <div className="mt-3 text-xs text-slate-300">コンテンツなし</div>

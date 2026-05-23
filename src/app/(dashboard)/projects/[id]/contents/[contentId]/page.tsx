@@ -1,10 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ContentStatusBadge } from '@/components/StatusBadge'
-import type { Content, ContentStatus, AiPromptType } from '@/lib/types'
+import type { Content, ContentStatus, AiPromptType, ChatMessage } from '@/lib/types'
 import { useRouter, useParams } from 'next/navigation'
 import Toast from '@/components/Toast'
 
@@ -43,6 +43,8 @@ const AI_TABS: { value: AiPromptType; label: string }[] = [
   { value: 'tone', label: '文体' },
 ]
 
+type ActivePanel = AiPromptType | 'investigate'
+
 export default function ContentPage() {
   const params = useParams()
   const projectId = params.id as string
@@ -61,7 +63,8 @@ export default function ContentPage() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
   // AI 提案関連
-  const [aiTab, setAiTab] = useState<AiPromptType>('improve')
+  const [activePanel, setActivePanel] = useState<ActivePanel>('improve')
+  const aiTab = activePanel !== 'investigate' ? activePanel : 'improve'
   const [aiResult, setAiResult] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const [isMock, setIsMock] = useState(false)
@@ -69,6 +72,12 @@ export default function ContentPage() {
   const [projectFiles, setProjectFiles] = useState<{ id: string; name: string }[]>([])
   const [selectedFileIds, setSelectedFileIds] = useState<string[]>([])
   const [filesUsed, setFilesUsed] = useState<string[]>([])
+
+  // 技術調査チャット関連
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const chatBottomRef = useRef<HTMLDivElement>(null)
 
   const [history, setHistory] = useState<HistoryItem[]>([])
 
@@ -305,6 +314,102 @@ export default function ContentPage() {
     if (aiResult) setBody((prev) => prev + '\n\n' + aiResult)
   }
 
+  // ============================================================
+  // 技術調査チャット送信
+  // ============================================================
+  async function handleChatSend(overrideInput?: string) {
+    const inputText = overrideInput ?? chatInput
+    if (!inputText.trim() || chatLoading) return
+
+    const newUserMsg: ChatMessage = { role: 'user', content: inputText.trim() }
+    const newMessages = [...chatMessages, newUserMsg]
+    setChatMessages(newMessages)
+    setChatInput('')
+    setChatLoading(true)
+
+    // スクロールを最下部へ
+    setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50)
+
+    try {
+      const res = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: newMessages,
+          contentBody: body,
+          contentId,
+          selectedFileIds: useProjectFiles ? selectedFileIds : [],
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json() as { error?: string }
+        const errMsg = err.error ?? 'チャットの送信に失敗しました'
+        setChatMessages((prev) => [...prev, { role: 'assistant', content: `❌ ${errMsg}` }])
+        return
+      }
+
+      const contentType = res.headers.get('content-type') ?? ''
+
+      if (contentType.includes('text/event-stream')) {
+        // SSE ストリーミング
+        const reader = res.body!.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let fullText = ''
+
+        // ストリーミング中のプレースホルダー
+        setChatMessages((prev) => [...prev, { role: 'assistant', content: '' }])
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          let newlineIdx: number
+          while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newlineIdx).trimEnd()
+            buffer = buffer.slice(newlineIdx + 1)
+            if (!line.startsWith('data: ')) continue
+            const payload = line.slice(6)
+            if (payload === '[DONE]') continue
+            try {
+              const json = JSON.parse(payload) as { chunk?: string; filesUsed?: string[]; error?: string }
+              if (json.chunk) {
+                fullText += json.chunk
+                // 最後のメッセージ（アシスタント）を更新
+                setChatMessages((prev) => {
+                  const updated = [...prev]
+                  updated[updated.length - 1] = { role: 'assistant', content: fullText }
+                  return updated
+                })
+              }
+              if (json.filesUsed) setFilesUsed(json.filesUsed)
+            } catch { /* ignore */ }
+          }
+        }
+      } else {
+        // JSON レスポンス（モックモード）
+        const data = await res.json() as { response: string; isMock?: boolean; filesUsed?: string[] }
+        setIsMock(data.isMock ?? false)
+        if (data.filesUsed) setFilesUsed(data.filesUsed)
+        setChatMessages((prev) => [...prev, { role: 'assistant', content: data.response }])
+      }
+    } catch {
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: '❌ ネットワークエラーが発生しました' }])
+    } finally {
+      setChatLoading(false)
+      setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
+    }
+  }
+
+  function handleChatKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      void handleChatSend()
+    }
+  }
+
   const allowedStatuses = useMemo(() => STATUS_BY_ROLE[currentUserRole] ?? [], [currentUserRole])
   const isReadOnly = currentUserRole === 'viewer'
   const canDelete = currentUserRole === 'admin'
@@ -467,14 +572,14 @@ export default function ContentPage() {
               </div>
             )}
 
-            {/* 提案タイプ タブ */}
-            <div className="mb-4 flex rounded-lg border border-slate-200 p-0.5">
+            {/* 提案タイプ タブ（1行目: 改善/要約/SEO/文体）*/}
+            <div className="mb-1 flex rounded-lg border border-slate-200 p-0.5">
               {AI_TABS.map((tab) => (
                 <button
                   key={tab.value}
-                  onClick={() => setAiTab(tab.value)}
+                  onClick={() => setActivePanel(tab.value)}
                   className={`flex-1 rounded-md py-1.5 text-xs font-medium transition ${
-                    aiTab === tab.value
+                    activePanel === tab.value
                       ? 'bg-blue-500 text-white'
                       : 'text-slate-500 hover:text-slate-700'
                   }`}
@@ -483,6 +588,164 @@ export default function ContentPage() {
                 </button>
               ))}
             </div>
+            {/* 2行目: 技術調査タブ */}
+            <div className="mb-4 flex rounded-lg border border-slate-200 p-0.5">
+              <button
+                onClick={() => { setActivePanel('investigate'); setFilesUsed([]) }}
+                className={`flex-1 rounded-md py-1.5 text-xs font-medium transition ${
+                  activePanel === 'investigate'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                🔍 技術調査（チャット）
+              </button>
+            </div>
+
+            {/* ============================================================ */}
+            {/* 技術調査（チャット）パネル */}
+            {/* ============================================================ */}
+            {activePanel === 'investigate' && (
+              <div className="flex flex-col">
+                {/* プロジェクト資料参照チェックボックス（技術調査用） */}
+                <div className="mb-3">
+                  <label className={`flex items-center gap-2 text-xs ${projectFiles.length === 0 ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
+                    <input
+                      type="checkbox"
+                      checked={useProjectFiles}
+                      onChange={(e) => setUseProjectFiles(e.target.checked)}
+                      disabled={projectFiles.length === 0}
+                      className="h-3.5 w-3.5 rounded border-slate-300 accent-indigo-600"
+                    />
+                    <span className="font-medium text-slate-600">仕様書・設計書を参照</span>
+                  </label>
+                  {useProjectFiles && projectFiles.length > 0 && (
+                    <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+                      <div className="mb-1.5 flex items-center justify-between">
+                        <span className="text-xs text-slate-500">参照する資料を選択</span>
+                        <div className="flex gap-2 text-xs text-indigo-500">
+                          <button onClick={() => setSelectedFileIds(projectFiles.map((f) => f.id))} className="hover:underline">全選択</button>
+                          <span className="text-slate-300">|</span>
+                          <button onClick={() => setSelectedFileIds([])} className="hover:underline">全解除</button>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        {projectFiles.map((file) => (
+                          <label key={file.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-slate-100">
+                            <input
+                              type="checkbox"
+                              checked={selectedFileIds.includes(file.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedFileIds((prev) => [...prev, file.id])
+                                } else {
+                                  setSelectedFileIds((prev) => prev.filter((id) => id !== file.id))
+                                }
+                              }}
+                              className="h-3 w-3 accent-indigo-600"
+                            />
+                            <span className="truncate text-slate-700" title={file.name}>{file.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <p className="mt-1.5 text-right text-xs text-slate-400">{selectedFileIds.length} / {projectFiles.length} 件選択中</p>
+                    </div>
+                  )}
+                  {projectFiles.length === 0 && (
+                    <p className="mt-1 pl-5 text-xs text-slate-400">テキスト抽出済みのファイルがありません</p>
+                  )}
+                </div>
+
+                {/* クイック調査ボタン */}
+                {chatMessages.length === 0 && (
+                  <div className="mb-3 space-y-1.5">
+                    <p className="text-xs font-medium text-slate-500">よく使う質問：</p>
+                    {[
+                      '仕様通りか設計書と照合してください',
+                      'この現象の原因として考えられるものを教えてください',
+                      '推奨される対策を教えてください',
+                    ].map((q) => (
+                      <button
+                        key={q}
+                        onClick={() => void handleChatSend(q)}
+                        disabled={chatLoading}
+                        className="w-full rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-left text-xs text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* チャット履歴 */}
+                {chatMessages.length > 0 && (
+                  <div className="mb-3 max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2 space-y-2">
+                    {chatMessages.map((msg, i) => (
+                      <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          className={`max-w-[90%] rounded-lg px-3 py-2 text-xs leading-relaxed whitespace-pre-wrap ${
+                            msg.role === 'user'
+                              ? 'bg-indigo-500 text-white'
+                              : 'bg-white border border-slate-200 text-slate-700'
+                          }`}
+                        >
+                          {msg.content || (
+                            <span className="inline-flex items-center gap-1 text-slate-400">
+                              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-slate-400" />
+                              生成中...
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    <div ref={chatBottomRef} />
+                  </div>
+                )}
+
+                {/* 参照した資料 */}
+                {filesUsed.length > 0 && (
+                  <div className="mb-2 rounded-lg bg-slate-50 px-3 py-1.5 text-xs text-slate-500">
+                    📎 参照: {filesUsed.join('、')}
+                  </div>
+                )}
+
+                {/* 入力エリア */}
+                <div className="flex flex-col gap-1.5">
+                  <textarea
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={handleChatKeyDown}
+                    rows={2}
+                    placeholder="質問を入力（Enter送信 / Shift+Enterで改行）"
+                    className="w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-xs outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => void handleChatSend()}
+                      disabled={chatLoading || !chatInput.trim()}
+                      className="flex-1 rounded-lg bg-indigo-600 py-2 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {chatLoading ? '送信中...' : '送信'}
+                    </button>
+                    {chatMessages.length > 0 && (
+                      <button
+                        onClick={() => { setChatMessages([]); setFilesUsed([]) }}
+                        className="rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-500 hover:bg-slate-50"
+                        title="会話をリセット"
+                      >
+                        リセット
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ============================================================ */}
+            {/* 通常の AI 改善提案パネル */}
+            {/* ============================================================ */}
+            {activePanel !== 'investigate' && (
+              <div>
 
             {/* プロジェクト資料参照チェックボックス */}
             <div className="mb-4">
@@ -605,6 +868,8 @@ export default function ContentPage() {
                 >
                   却下
                 </button>
+              </div>
+            )}
               </div>
             )}
           </div>

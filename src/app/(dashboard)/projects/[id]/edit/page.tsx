@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import Toast from '@/components/Toast'
+import { PROJECT_STATUS_OPTIONS } from '@/components/StatusBadge'
 import type { ProjectStatus } from '@/lib/types'
 
 export default function EditProjectPage() {
@@ -149,9 +150,9 @@ export default function EditProjectPage() {
               onChange={(e) => setStatus(e.target.value as ProjectStatus)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
             >
-              <option value="active">Active</option>
-              <option value="completed">Completed</option>
-              <option value="archived">Archived</option>
+              {PROJECT_STATUS_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
             </select>
           </div>
 
