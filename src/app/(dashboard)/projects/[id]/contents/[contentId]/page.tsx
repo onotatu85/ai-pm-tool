@@ -30,10 +30,10 @@ type HistoryItem = {
 }
 
 const STATUS_OPTIONS: { value: ContentStatus; label: string }[] = [
-  { value: 'draft', label: 'Draft' },
-  { value: 'review', label: 'Review' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'published', label: 'Published' },
+  { value: 'draft', label: '下書き' },
+  { value: 'review', label: 'レビュー中' },
+  { value: 'approved', label: '承認済み' },
+  { value: 'published', label: '公開済み' },
 ]
 
 const AI_TABS: { value: AiPromptType; label: string }[] = [

@@ -95,10 +95,10 @@ export default function NewContentPage() {
               onChange={(e) => setStatus(e.target.value as ContentStatus)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
             >
-              <option value="draft">Draft</option>
-              <option value="review">Review</option>
-              <option value="approved">Approved</option>
-              <option value="published">Published</option>
+              <option value="draft">下書き</option>
+              <option value="review">レビュー中</option>
+              <option value="approved">承認済み</option>
+              <option value="published">公開済み</option>
             </select>
           </div>
 

@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { ProjectStatusBadge } from '@/components/StatusBadge'
 import ContentList from '@/components/ContentList'
 import ProjectFilesSection from '@/components/ProjectFilesSection'
+import DeleteProjectButton from '@/components/DeleteProjectButton'
 import type { Content } from '@/lib/types'
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
@@ -38,6 +39,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           )}
         </div>
         <div className="flex gap-2">
+          <DeleteProjectButton projectId={id} />
           <Link
             href={`/projects/${id}/edit`}
             className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
